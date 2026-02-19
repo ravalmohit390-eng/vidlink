@@ -68,7 +68,10 @@ const Home = () => {
 
         } catch (error) {
             console.error('Upload failed:', error);
-            alert('Upload failed. Please try again.');
+            const status = error.response?.status;
+            const url = error.config?.url;
+            const msg = error.response?.data?.error || error.message;
+            alert(`UPLOAD FAILED\nStatus: ${status || 'Network Error'}\nURL: ${url}\nError: ${msg}\n\nTip: Make sure you added MONGODB_URI in Vercel settings.`);
             setUploading(false);
         }
     };

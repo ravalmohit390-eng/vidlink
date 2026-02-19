@@ -81,6 +81,10 @@ app.post('/api/upload', upload.single('video'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ error: 'No video file uploaded' });
 
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ error: 'Database not connected. Check MONGODB_URI.' });
+        }
+
         const { title, password, expiry } = req.body;
         const videoId = nanoid(8);
 
