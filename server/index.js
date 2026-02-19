@@ -242,8 +242,9 @@ app.delete('/api/videos/:id', authenticate, (req, res) => {
     res.json({ message: 'Deleted' });
 });
 
-if (process.env.NODE_ENV !== 'production') {
-    app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+const isMain = require.main === module;
+if (isMain || process.env.RAILWAY_STATIC_URL || process.env.PORT) {
+    app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
 }
 
 module.exports = app;
