@@ -16,24 +16,24 @@
     "routes": [
         {
             "src": "/api/(.*)",
-            "dest": "server/index.js"
+            "dest": "/server/index.js"
         },
         {
             "src": "/uploads/(.*)",
-            "dest": "server/index.js"
+            "dest": "/server/index.js"
         },
         {
             "src": "/static/(.*)",
-            "dest": "/client/static/$1"
+            "dest": "/static/$1"
         },
         {
             "src": "/(.*)",
-            "dest": "/client/$1",
+            "dest": "/$1",
             "check": true
         },
         {
             "src": "/(.*)",
-            "dest": "/client/index.html"
+            "dest": "/index.html"
         }
     ]
 }

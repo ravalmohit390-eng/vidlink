@@ -3,7 +3,16 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { nanoid } = require('nanoid');
+
+// Simple nanoid replacement for CommonJS
+const nanoid = (size = 10) => {
+    const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz-';
+    let id = '';
+    while (size--) {
+        id += alphabet[Math.floor(Math.random() * 64)];
+    }
+    return id;
+};
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
@@ -15,35 +24,60 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Data storage helpers
+const isProd = process.env.NODE_ENV === 'production';
+const uploadDir = isProd ? '/tmp/uploads' : path.join(__dirname, 'uploads');
+const DB_FILE = isProd ? path.join('/tmp', 'videos.json') : path.join(__dirname, 'videos.json');
+const USERS_FILE = isProd ? path.join('/tmp', 'users.json') : path.join(__dirname, 'users.json');
 
-// Ensure uploads directory exists
-const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir);
+    fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// Data storage helpers
-const DB_FILE = path.join(__dirname, 'videos.json');
-const USERS_FILE = path.join(__dirname, 'users.json');
+// Serve uploads
+app.use('/uploads', express.static(uploadDir));
+
+// Initialize files in /tmp if they don't exist (Vercel)
+if (isProd) {
+    if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, '[]');
+    if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, '[]');
+}
 
 const getVideos = () => {
-    if (!fs.existsSync(DB_FILE)) return [];
     try {
+        if (!fs.existsSync(DB_FILE)) return [];
         return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-    } catch (e) { return []; }
+    } catch (e) {
+        console.error('Error reading videos:', e);
+        return [];
+    }
 };
 
-const saveVideos = (videos) => fs.writeFileSync(DB_FILE, JSON.stringify(videos, null, 2));
+const saveVideos = (videos) => {
+    try {
+        fs.writeFileSync(DB_FILE, JSON.stringify(videos, null, 2));
+    } catch (e) {
+        console.error('Error saving videos:', e);
+    }
+};
 
 const getUsers = () => {
-    if (!fs.existsSync(USERS_FILE)) return [];
     try {
+        if (!fs.existsSync(USERS_FILE)) return [];
         return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
-    } catch (e) { return []; }
+    } catch (e) {
+        console.error('Error reading users:', e);
+        return [];
+    }
 };
 
-const saveUsers = (users) => fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+const saveUsers = (users) => {
+    try {
+        fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+    } catch (e) {
+        console.error('Error saving users:', e);
+    }
+};
 
 // Auth Middleware
 const authenticate = (req, res, next) => {
@@ -61,7 +95,7 @@ const authenticate = (req, res, next) => {
 
 // Multer Config
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, 'uploads/'),
+    destination: (req, file, cb) => cb(null, uploadDir),
     filename: (req, file, cb) => {
         const uniqueName = `${nanoid(10)}${path.extname(file.originalname)}`;
         cb(null, uniqueName);
@@ -171,7 +205,7 @@ app.delete('/api/videos/:id', authenticate, (req, res) => {
     if (videoIndex === -1) return res.status(404).json({ error: 'Video not found or unauthorized' });
 
     const video = videos[videoIndex];
-    const filePath = path.join(__dirname, 'uploads', video.fileName);
+    const filePath = path.join(uploadDir, video.fileName);
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
 
     videos.splice(videoIndex, 1);
