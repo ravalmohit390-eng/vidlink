@@ -17,20 +17,11 @@ const Register = () => {
             alert('Registration successful! Please login.');
             navigate('/login');
         } catch (err) {
-            console.error('Registration error detail:', err);
-            const errorData = err.response?.data;
+            console.error('Registration error:', err);
             const status = err.response?.status;
-            let msg = 'Registration failed';
-
-            if (errorData) {
-                if (typeof errorData.error === 'string') msg = errorData.error;
-                else if (typeof errorData.message === 'string') msg = errorData.message;
-                else msg = JSON.stringify(errorData);
-            } else if (err.message) {
-                msg = err.message;
-            }
-
-            alert(`Error (${status || 'Network'}): ${msg}`);
+            const url = err.config?.url;
+            const msg = err.response?.data?.error || err.message;
+            alert(`REGISTRATION FAILED\nStatus: ${status || 'Network Error'}\nURL: ${url}\nError: ${msg}\n\nTip: Make sure you deployed the ROOT of the repo to Vercel, not just the client folder.`);
         }
     };
 
