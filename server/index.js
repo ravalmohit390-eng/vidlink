@@ -30,18 +30,20 @@ const uploadDir = isProd ? '/tmp/uploads' : path.join(__dirname, 'uploads');
 const DB_FILE = isProd ? path.join('/tmp', 'videos.json') : path.join(__dirname, 'videos.json');
 const USERS_FILE = isProd ? path.join('/tmp', 'users.json') : path.join(__dirname, 'users.json');
 
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-}
+// Initialize files in /tmp if they don't exist (Vercel)
+const initDB = () => {
+    try {
+        if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, '[]');
+        if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, '[]');
+        if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+    } catch (e) {
+        console.error('Storage init failed:', e);
+    }
+};
+initDB();
 
 // Serve uploads
 app.use('/uploads', express.static(uploadDir));
-
-// Initialize files in /tmp if they don't exist (Vercel)
-if (isProd) {
-    if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, '[]');
-    if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, '[]');
-}
 
 const getVideos = () => {
     try {
@@ -103,34 +105,51 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
 
-// Auth Routes
 app.post('/api/auth/register', async (req, res) => {
-    const { username, password } = req.body;
-    const users = getUsers();
-    if (users.find(u => u.username === username)) {
-        return res.status(400).json({ error: 'User already exists' });
+    try {
+        const { username, password } = req.body;
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password are required' });
+        }
+
+        const users = getUsers();
+        if (users.find(u => u.username === username)) {
+            return res.status(400).json({ error: 'User already exists' });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const newUser = { id: nanoid(), username, password: hashedPassword };
+        users.push(newUser);
+        saveUsers(users);
+
+        const token = jwt.sign({ id: newUser.id, username }, JWT_SECRET, { expiresIn: '7d' });
+        res.json({ token, user: { username } });
+    } catch (err) {
+        console.error('Registration error:', err);
+        res.status(500).json({ error: 'Internal server error during registration' });
     }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const newUser = { id: nanoid(), username, password: hashedPassword };
-    users.push(newUser);
-    saveUsers(users);
-
-    const token = jwt.sign({ id: newUser.id, username }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ token, user: { username } });
 });
 
 app.post('/api/auth/login', async (req, res) => {
-    const { username, password } = req.body;
-    const users = getUsers();
-    const user = users.find(u => u.username === username);
+    try {
+        const { username, password } = req.body;
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password are required' });
+        }
 
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-        return res.status(401).json({ error: 'Invalid credentials' });
+        const users = getUsers();
+        const user = users.find(u => u.username === username);
+
+        if (!user || !(await bcrypt.compare(password, user.password))) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        const token = jwt.sign({ id: user.id, username }, JWT_SECRET, { expiresIn: '7d' });
+        res.json({ token, user: { username } });
+    } catch (err) {
+        console.error('Login error:', err);
+        res.status(500).json({ error: 'Internal server error during login' });
     }
-
-    const token = jwt.sign({ id: user.id, username }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ token, user: { username } });
 });
 
 // Video Routes

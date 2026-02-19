@@ -17,8 +17,20 @@ const Register = () => {
             alert('Registration successful! Please login.');
             navigate('/login');
         } catch (err) {
-            const errorMsg = err.response?.data?.error;
-            alert(typeof errorMsg === 'string' ? errorMsg : (err.response?.data?.message || 'Registration failed'));
+            console.error('Registration error detail:', err);
+            const errorData = err.response?.data;
+            const status = err.response?.status;
+            let msg = 'Registration failed';
+
+            if (errorData) {
+                if (typeof errorData.error === 'string') msg = errorData.error;
+                else if (typeof errorData.message === 'string') msg = errorData.message;
+                else msg = JSON.stringify(errorData);
+            } else if (err.message) {
+                msg = err.message;
+            }
+
+            alert(`Error (${status || 'Network'}): ${msg}`);
         }
     };
 
