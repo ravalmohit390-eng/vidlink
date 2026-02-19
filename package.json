@@ -3,18 +3,14 @@
     "version": "1.0.0",
     "private": true,
     "scripts": {
-        "build": "cd client && npm install && npm run build",
+        "build": "cd client && npm install --include=dev && npm run build",
         "install-server": "cd server && npm install",
         "vercel-build": "npm run build && npm run install-server"
     },
-    "dependencies": {
-        "express": "^4.19.2",
-        "cors": "^2.8.6",
-        "multer": "^1.4.5-lts.1",
-        "bcryptjs": "^2.4.3",
-        "jsonwebtoken": "^9.0.2",
-        "dotenv": "^16.4.5"
-    },
+    "workspaces": [
+        "client",
+        "server"
+    ],
     "engines": {
         "node": "20.x"
     }
