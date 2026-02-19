@@ -3,6 +3,10 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+require('dotenv').config();
 
 // Simple nanoid replacement for CommonJS
 const nanoid = (size = 10) => {
@@ -13,83 +17,67 @@ const nanoid = (size = 10) => {
     }
     return id;
 };
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
+const MONGODB_URI = process.env.MONGODB_URI;
+
+// Connect to MongoDB
+if (MONGODB_URI) {
+    mongoose.connect(MONGODB_URI)
+        .then(() => console.log('Connected to MongoDB'))
+        .catch(err => console.error('MongoDB connection error:', err));
+} else {
+    console.warn('MONGODB_URI not found. Database features will fail.');
+}
+
+// Schemas
+const userSchema = new mongoose.Schema({
+    id: { type: String, unique: true },
+    username: { type: String, required: true, unique: true },
+    password: { type: String, required: true }
+});
+
+const videoSchema = new mongoose.Schema({
+    id: { type: String, unique: true },
+    userId: { type: String, required: true },
+    fileName: { type: String, required: true },
+    originalName: { type: String, required: true },
+    title: { type: String },
+    uploadDate: { type: Date, default: Date.now },
+    views: { type: Number, default: 0 },
+    size: { type: Number },
+    password: { type: String, default: null },
+    expiry: { type: Date, default: null }
+});
+
+const User = mongoose.model('User', userSchema);
+const Video = mongoose.model('Video', videoSchema);
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+const isProd = process.env.NODE_ENV === 'production';
+const uploadDir = isProd ? '/tmp/uploads' : path.join(__dirname, '..', 'server', 'uploads');
+
+// Ensure upload directory exists
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Serve uploads
+app.use('/uploads', express.static(uploadDir));
 
 // Test Route
 app.get('/api/health', (req, res) => {
     res.json({
         status: 'ok',
-        time: new Date().toISOString(),
-        env: process.env.NODE_ENV,
-        node: process.version
+        mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+        time: new Date().toISOString()
     });
 });
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-// Data storage helpers
-const isProd = process.env.NODE_ENV === 'production';
-const uploadDir = isProd ? '/tmp/uploads' : path.join(__dirname, '..', 'server', 'uploads');
-const DB_FILE = isProd ? path.join('/tmp', 'videos.json') : path.join(__dirname, '..', 'server', 'videos.json');
-const USERS_FILE = isProd ? path.join('/tmp', 'users.json') : path.join(__dirname, '..', 'server', 'users.json');
-
-// Initialize files in /tmp if they don't exist (Vercel)
-const initDB = () => {
-    try {
-        if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, '[]');
-        if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, '[]');
-        if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-    } catch (e) {
-        console.error('Storage init failed:', e);
-    }
-};
-initDB();
-
-// Serve uploads
-app.use('/uploads', express.static(uploadDir));
-
-const getVideos = () => {
-    try {
-        if (!fs.existsSync(DB_FILE)) return [];
-        return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-    } catch (e) {
-        console.error('Error reading videos:', e);
-        return [];
-    }
-};
-
-const saveVideos = (videos) => {
-    try {
-        fs.writeFileSync(DB_FILE, JSON.stringify(videos, null, 2));
-    } catch (e) {
-        console.error('Error saving videos:', e);
-    }
-};
-
-const getUsers = () => {
-    try {
-        if (!fs.existsSync(USERS_FILE)) return [];
-        return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
-    } catch (e) {
-        console.error('Error reading users:', e);
-        return [];
-    }
-};
-
-const saveUsers = (users) => {
-    try {
-        fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
-    } catch (e) {
-        console.error('Error saving users:', e);
-    }
-};
 
 // Auth Middleware
 const authenticate = (req, res, next) => {
@@ -122,15 +110,18 @@ app.post('/api/auth/register', async (req, res) => {
             return res.status(400).json({ error: 'Username and password are required' });
         }
 
-        const users = getUsers();
-        if (users.find(u => u.username === username)) {
+        const existingUser = await User.findOne({ username });
+        if (existingUser) {
             return res.status(400).json({ error: 'User already exists' });
         }
 
         const hashedPassword = await bcrypt.hash(password, 10);
-        const newUser = { id: nanoid(), username, password: hashedPassword };
-        users.push(newUser);
-        saveUsers(users);
+        const newUser = new User({
+            id: nanoid(),
+            username,
+            password: hashedPassword
+        });
+        await newUser.save();
 
         const token = jwt.sign({ id: newUser.id, username }, JWT_SECRET, { expiresIn: '7d' });
         res.json({ token, user: { username } });
@@ -147,9 +138,7 @@ app.post('/api/auth/login', async (req, res) => {
             return res.status(400).json({ error: 'Username and password are required' });
         }
 
-        const users = getUsers();
-        const user = users.find(u => u.username === username);
-
+        const user = await User.findOne({ username });
         if (!user || !(await bcrypt.compare(password, user.password))) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
@@ -163,87 +152,103 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // Video Routes
-app.post('/api/upload', authenticate, upload.single('video'), (req, res) => {
-    if (!req.file) return res.status(400).json({ error: 'No video file uploaded' });
+app.post('/api/upload', authenticate, upload.single('video'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ error: 'No video file uploaded' });
 
-    const { title, password, expiry } = req.body;
-    const videoId = nanoid(8);
-    const videoData = {
-        id: videoId,
-        userId: req.user.id,
-        fileName: req.file.filename,
-        originalName: req.file.originalname,
-        title: title || req.file.originalname,
-        uploadDate: new Date().toISOString(),
-        views: 0,
-        size: req.file.size,
-        password: password || null,
-        expiry: expiry ? new Date(Date.now() + parseInt(expiry) * 60 * 60 * 1000) : null
-    };
+        const { title, password, expiry } = req.body;
+        const videoId = nanoid(8);
 
-    const videos = getVideos();
-    videos.push(videoData);
-    saveVideos(videos);
-    res.json(videoData);
-});
+        const videoData = new Video({
+            id: videoId,
+            userId: req.user.id,
+            fileName: req.file.filename,
+            originalName: req.file.originalname,
+            title: title || req.file.originalname,
+            size: req.file.size,
+            password: password || null,
+            expiry: expiry ? new Date(Date.now() + parseInt(expiry) * 60 * 60 * 1000) : null
+        });
 
-app.get('/api/videos', authenticate, (req, res) => {
-    const videos = getVideos();
-    const userVideos = videos.filter(v => v.userId === req.user.id);
-    const now = new Date();
-    const activeVideos = userVideos.filter(v => !v.expiry || new Date(v.expiry) > now);
-    res.json(activeVideos);
-});
-
-app.get('/api/videos/:id', (req, res) => {
-    const videos = getVideos();
-    const video = videos.find(v => v.id === req.params.id);
-
-    if (!video) return res.status(404).json({ error: 'Video not found' });
-    if (video.expiry && new Date(video.expiry) < new Date()) {
-        return res.status(410).json({ error: 'Video link has expired' });
+        await videoData.save();
+        res.json(videoData);
+    } catch (err) {
+        console.error('Upload error:', err);
+        res.status(500).json({ error: 'Upload failed' });
     }
-
-    const { password, fileName, ...safeVideo } = video;
-    if (password) return res.json({ ...safeVideo, isProtected: true });
-
-    video.views += 1;
-    saveVideos(videos);
-    res.json({ ...safeVideo, fileName });
 });
 
-app.post('/api/videos/:id/verify', (req, res) => {
-    const { password } = req.body;
-    const videos = getVideos();
-    const video = videos.find(v => v.id === req.params.id);
-
-    if (!video || video.password !== password) {
-        return res.status(401).json({ error: 'Incorrect password' });
+app.get('/api/videos', authenticate, async (req, res) => {
+    try {
+        const now = new Date();
+        const userVideos = await Video.find({
+            userId: req.user.id,
+            $or: [{ expiry: null }, { expiry: { $gt: now } }]
+        }).sort({ uploadDate: -1 });
+        res.json(userVideos);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch videos' });
     }
-
-    video.views += 1;
-    saveVideos(videos);
-    const { password: _, ...safeVideo } = video;
-    res.json(safeVideo);
 });
 
-app.delete('/api/videos/:id', authenticate, (req, res) => {
-    const videos = getVideos();
-    const videoIndex = videos.findIndex(v => v.id === req.params.id && v.userId === req.user.id);
+app.get('/api/videos/:id', async (req, res) => {
+    try {
+        const video = await Video.findOne({ id: req.params.id });
 
-    if (videoIndex === -1) return res.status(404).json({ error: 'Video not found or unauthorized' });
+        if (!video) return res.status(404).json({ error: 'Video not found' });
+        if (video.expiry && video.expiry < new Date()) {
+            return res.status(410).json({ error: 'Video link has expired' });
+        }
 
-    const video = videos[videoIndex];
-    const filePath = path.join(uploadDir, video.fileName);
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        if (video.password) {
+            const { password, fileName, ...safeVideo } = video.toObject();
+            return res.json({ ...safeVideo, isProtected: true });
+        }
 
-    videos.splice(videoIndex, 1);
-    saveVideos(videos);
-    res.json({ message: 'Deleted' });
+        video.views += 1;
+        await video.save();
+        res.json(video);
+    } catch (err) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
 });
 
-if (process.env.NODE_ENV !== 'production') {
-    app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+app.post('/api/videos/:id/verify', async (req, res) => {
+    try {
+        const { password } = req.body;
+        const video = await Video.findOne({ id: req.params.id });
+
+        if (!video || video.password !== password) {
+            return res.status(401).json({ error: 'Incorrect password' });
+        }
+
+        video.views += 1;
+        await video.save();
+        res.json(video);
+    } catch (err) {
+        res.status(500).json({ error: 'Verification failed' });
+    }
+});
+
+app.delete('/api/videos/:id', authenticate, async (req, res) => {
+    try {
+        const video = await Video.findOne({ id: req.params.id, userId: req.user.id });
+
+        if (!video) return res.status(404).json({ error: 'Video not found or unauthorized' });
+
+        const filePath = path.join(uploadDir, video.fileName);
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
+        await Video.deleteOne({ id: req.params.id });
+        res.json({ message: 'Deleted' });
+    } catch (err) {
+        res.status(500).json({ error: 'Delete failed' });
+    }
+});
+
+const isMain = require.main === module;
+if (isMain || process.env.RAILWAY_STATIC_URL || process.env.PORT) {
+    app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
 }
 
 module.exports = app;
