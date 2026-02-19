@@ -4,8 +4,6 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 // Simple nanoid replacement for CommonJS
@@ -20,7 +18,6 @@ const nanoid = (size = 10) => {
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 const MONGODB_URI = process.env.MONGODB_URI;
 
 // Connect to MongoDB
@@ -28,20 +25,11 @@ if (MONGODB_URI) {
     mongoose.connect(MONGODB_URI)
         .then(() => console.log('Connected to MongoDB'))
         .catch(err => console.error('MongoDB connection error:', err));
-} else {
-    console.warn('MONGODB_URI not found. Database features will fail.');
 }
 
-// Schemas
-const userSchema = new mongoose.Schema({
-    id: { type: String, unique: true },
-    username: { type: String, required: true, unique: true },
-    password: { type: String, required: true }
-});
-
+// Schema
 const videoSchema = new mongoose.Schema({
     id: { type: String, unique: true },
-    userId: { type: String, required: true },
     fileName: { type: String, required: true },
     originalName: { type: String, required: true },
     title: { type: String },
@@ -52,7 +40,6 @@ const videoSchema = new mongoose.Schema({
     expiry: { type: Date, default: null }
 });
 
-const User = mongoose.model('User', userSchema);
 const Video = mongoose.model('Video', videoSchema);
 
 // Middleware
@@ -79,20 +66,6 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// Auth Middleware
-const authenticate = (req, res, next) => {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'Unauthorized' });
-
-    try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        req.user = decoded;
-        next();
-    } catch (e) {
-        res.status(401).json({ error: 'Invalid token' });
-    }
-};
-
 // Multer Config
 const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, uploadDir),
@@ -103,56 +76,8 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
 
-app.post('/api/auth/register', async (req, res) => {
-    try {
-        const { username, password } = req.body;
-        if (!username || !password) {
-            return res.status(400).json({ error: 'Username and password are required' });
-        }
-
-        const existingUser = await User.findOne({ username });
-        if (existingUser) {
-            return res.status(400).json({ error: 'User already exists' });
-        }
-
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const newUser = new User({
-            id: nanoid(),
-            username,
-            password: hashedPassword
-        });
-        await newUser.save();
-
-        const token = jwt.sign({ id: newUser.id, username }, JWT_SECRET, { expiresIn: '7d' });
-        res.json({ token, user: { username } });
-    } catch (err) {
-        console.error('Registration error:', err);
-        res.status(500).json({ error: 'Internal server error during registration' });
-    }
-});
-
-app.post('/api/auth/login', async (req, res) => {
-    try {
-        const { username, password } = req.body;
-        if (!username || !password) {
-            return res.status(400).json({ error: 'Username and password are required' });
-        }
-
-        const user = await User.findOne({ username });
-        if (!user || !(await bcrypt.compare(password, user.password))) {
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
-        const token = jwt.sign({ id: user.id, username }, JWT_SECRET, { expiresIn: '7d' });
-        res.json({ token, user: { username } });
-    } catch (err) {
-        console.error('Login error:', err);
-        res.status(500).json({ error: 'Internal server error during login' });
-    }
-});
-
 // Video Routes
-app.post('/api/upload', authenticate, upload.single('video'), async (req, res) => {
+app.post('/api/upload', upload.single('video'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ error: 'No video file uploaded' });
 
@@ -161,7 +86,6 @@ app.post('/api/upload', authenticate, upload.single('video'), async (req, res) =
 
         const videoData = new Video({
             id: videoId,
-            userId: req.user.id,
             fileName: req.file.filename,
             originalName: req.file.originalname,
             title: title || req.file.originalname,
@@ -178,14 +102,13 @@ app.post('/api/upload', authenticate, upload.single('video'), async (req, res) =
     }
 });
 
-app.get('/api/videos', authenticate, async (req, res) => {
+app.get('/api/videos', async (req, res) => {
     try {
         const now = new Date();
-        const userVideos = await Video.find({
-            userId: req.user.id,
+        const videos = await Video.find({
             $or: [{ expiry: null }, { expiry: { $gt: now } }]
         }).sort({ uploadDate: -1 });
-        res.json(userVideos);
+        res.json(videos);
     } catch (err) {
         res.status(500).json({ error: 'Failed to fetch videos' });
     }
@@ -230,11 +153,10 @@ app.post('/api/videos/:id/verify', async (req, res) => {
     }
 });
 
-app.delete('/api/videos/:id', authenticate, async (req, res) => {
+app.delete('/api/videos/:id', async (req, res) => {
     try {
-        const video = await Video.findOne({ id: req.params.id, userId: req.user.id });
-
-        if (!video) return res.status(404).json({ error: 'Video not found or unauthorized' });
+        const video = await Video.findOne({ id: req.params.id });
+        if (!video) return res.status(404).json({ error: 'Video not found' });
 
         const filePath = path.join(uploadDir, video.fileName);
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
