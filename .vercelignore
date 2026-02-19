@@ -1,7 +1,12 @@
 node_modules
 client/node_modules
 server/node_modules
+dist
 client/dist
+.git
+uploads
 server/uploads
-*.log
-.env
+*.json
+!package.json
+!server/package.json
+!client/package.json
