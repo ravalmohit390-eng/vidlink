@@ -3,9 +3,8 @@
     "version": "1.0.0",
     "private": true,
     "scripts": {
-        "build": "cd client && npm install --include=dev && npm run build",
-        "install-server": "cd server && npm install",
-        "vercel-build": "npm run build && npm run install-server"
+        "build": "npm install --legacy-peer-deps && cd client && npm run build",
+        "vercel-build": "npm run build"
     },
     "workspaces": [
         "client",
